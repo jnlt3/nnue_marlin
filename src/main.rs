@@ -12,14 +12,12 @@ use serde::{Deserialize, Serialize};
 
 const INPUTS: i64 = 768;
 const MID_0: i64 = 128;
-const MID_1: i64 = 64;
-const MID_2: i64 = 32;
 const OUT: i64 = 1;
 
-const BATCH_SIZE: usize = 32;
-const PRINT_ITER: usize = 200;
+const BATCH_SIZE: usize = 16384;
+const PRINT_ITER: usize = 20;
 
-const SCALE: f32 = 400.0;
+const SCALE: f32 = 300.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct W {
@@ -39,28 +37,8 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
         ))
         .add_fn(|x| x.clamp(0.0, 1.0))
         .add(nn::linear(
-            vs / "mid_0",
-            MID_0,
-            MID_1,
-            LinearConfig {
-                bias: false,
-                ..Default::default()
-            },
-        ))
-        .add_fn(|x| x.clamp(0.0, 1.0))
-        .add(nn::linear(
-            vs / "mid_1",
-            MID_1,
-            MID_2,
-            LinearConfig {
-                bias: false,
-                ..Default::default()
-            },
-        ))
-        .add_fn(|x| x.clamp(0.0, 1.0))
-        .add(nn::linear(
             vs / "out",
-            MID_2,
+            MID_0,
             OUT,
             LinearConfig {
                 bias: false,
@@ -70,7 +48,7 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
         .add_fn(|x| x.sigmoid())
 }
 
-fn train(mut data: Vec<BoardEval>, device: Device, out_file: &str) {
+fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
     let vs = nn::VarStore::new(device);
     let net = nnue(&vs.root());
     let mut opt = nn::AdamW::default().build(&vs, 1e-3).unwrap();
@@ -81,7 +59,7 @@ fn train(mut data: Vec<BoardEval>, device: Device, out_file: &str) {
         let mut counter = 0;
         for index in (BATCH_SIZE..data.len()).step_by(BATCH_SIZE) {
             let slice = &data[index - BATCH_SIZE..index];
-            let data = to_input_vectors(slice);
+            let data = to_input_vectors(slice, wdl);
             let loss = net
                 .forward(&data.inputs)
                 .mse_loss(&data.outputs, tch::Reduction::Mean);
@@ -91,8 +69,8 @@ fn train(mut data: Vec<BoardEval>, device: Device, out_file: &str) {
                 value.set_data(&value.clamp(-1.98, 1.98));
             }
 
-            total_loss += loss.detach();
-            running_loss += loss.detach();
+            total_loss += &loss;
+            running_loss += &loss;
             counter += 1;
             if counter % PRINT_ITER == (PRINT_ITER - 1) {
                 println!(
@@ -103,16 +81,15 @@ fn train(mut data: Vec<BoardEval>, device: Device, out_file: &str) {
                 running_loss = Tensor::of_slice(&[0.0]).detach();
             }
         }
-        let mut weights = vec![vec![]; 4];
+        let mut weights = vec![vec![]; 2];
         for (name, tensor) in &vs.variables() {
             let (index, input_size) = if name == "input.weight" {
                 (0, INPUTS)
-            } else if name == "mid_0.weight" {
+            } else if name == "out.weight" {
                 (1, MID_0)
-            } else if name == "mid_1.weight" {
-                (2, MID_1)
             } else {
-                (3, MID_2)
+                println!("WARNING: UNKNOWN LAYER");
+                (1, 1)
             };
             weights[index] = tensor_to_slice(&tensor, input_size);
         }
@@ -150,6 +127,11 @@ fn main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("wdl")
+                .long("wdl")
+                .help("Uses WDL info when training"),
+        )
+        .arg(
             Arg::with_name("cuda")
                 .long("cuda")
                 .help("Uses a CUDA GPU with the given id if available")
@@ -160,7 +142,9 @@ fn main() {
     let files = matches.value_of("directory").unwrap();
     let output = matches.value_of("out").unwrap();
     let gpu = matches.value_of("cuda");
+    let wdl = matches.value_of("wdl").is_some();
 
+    tch::set_num_threads(8);
     let device = if let Some(gpu) = gpu {
         Device::Cuda(gpu.parse::<usize>().unwrap())
     } else {
@@ -172,7 +156,7 @@ fn main() {
 
     println!("parsed {} boards in {:?}", boards.len(), time.elapsed());
 
-    train(boards, device, output);
+    train(boards, wdl, device, output);
 }
 
 fn tensor_to_slice(tensor: &Tensor, input_size: i64) -> Vec<Vec<f64>> {
@@ -210,14 +194,18 @@ pub struct DataSet {
     outputs: Tensor,
 }
 
-fn to_input_vectors(board_eval: &[BoardEval]) -> DataSet {
+fn to_input_vectors(board_eval: &[BoardEval], wdl: bool) -> DataSet {
     let mut inputs = vec![];
     let mut outputs = vec![];
     for board_eval in board_eval {
         let (w, b) = to_input_vector(board_eval.board);
         inputs.extend(w.iter().cloned());
         inputs.extend(b.iter().cloned());
-        let sigmoid_eval = 1.0 / (1.0 + (-board_eval.eval as f32 / SCALE).exp());
+        let sigmoid_eval = if wdl {
+            -board_eval.eval
+        } else {
+            1.0 / (1.0 + (-board_eval.eval as f32 / SCALE).exp())
+        };
         outputs.push(sigmoid_eval);
         outputs.push(1.0 - sigmoid_eval);
     }
