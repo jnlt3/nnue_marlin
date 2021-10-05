@@ -7,9 +7,9 @@ It currently supports different configurations via changing code manually howeve
 
 In order to get started, generate txt files with the following format:
 
-<fen_0> <evaluation_0>
-<fen_1> <evaluation_1>
-...
+<fen_0> <evaluation_0>\
+<fen_1> <evaluation_1>\
+...\
 
 Put the files you wish to use for training in a single directory and then call it via
 `cargo run --release -- --dir <dir> --out <nnue_file>.json`
