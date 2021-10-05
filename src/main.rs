@@ -74,7 +74,7 @@ fn train(mut data: Vec<BoardEval>, out_file: &str) {
     let vs = nn::VarStore::new(Device::Cpu);
     let net = nnue(&vs.root());
     let mut opt = nn::AdamW::default().build(&vs, 1e-3).unwrap();
-    for epoch in 0..2000 {
+    for epoch in 0.. {
         data.shuffle(&mut rand::thread_rng());
         let mut total_loss = Tensor::of_slice(&[0.0]).detach();
         let mut running_loss = Tensor::of_slice(&[0.0]).detach();
