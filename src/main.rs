@@ -70,8 +70,8 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
         .add_fn(|x| x.sigmoid())
 }
 
-fn train(mut data: Vec<BoardEval>, out_file: &str) {
-    let vs = nn::VarStore::new(Device::Cpu);
+fn train(mut data: Vec<BoardEval>, device: Device, out_file: &str) {
+    let vs = nn::VarStore::new(device);
     let net = nnue(&vs.root());
     let mut opt = nn::AdamW::default().build(&vs, 1e-3).unwrap();
     for epoch in 0.. {
@@ -149,17 +149,30 @@ fn main() {
                 .help("Outputs the NNUE to this file")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("cuda")
+                .long("cuda")
+                .help("Uses a CUDA GPU with the given id if available")
+                .takes_value(true),
+        )
         .get_matches();
 
     let files = matches.value_of("directory").unwrap();
     let output = matches.value_of("out").unwrap();
+    let gpu = matches.value_of("cuda");
+
+    let device = if let Some(gpu) = gpu {
+        Device::Cuda(gpu.parse::<usize>().unwrap())
+    } else {
+        Device::Cpu
+    };
 
     let time = Instant::now();
     let boards = parse_to_boards(files);
 
     println!("parsed {} boards in {:?}", boards.len(), time.elapsed());
 
-    train(boards, output);
+    train(boards, device, output);
 }
 
 fn tensor_to_slice(tensor: &Tensor, input_size: i64) -> Vec<Vec<f64>> {
@@ -202,8 +215,8 @@ fn to_input_vectors(board_eval: &[BoardEval]) -> DataSet {
     let mut outputs = vec![];
     for board_eval in board_eval {
         let (w, b) = to_input_vector(board_eval.board);
-        inputs.extend(w);
-        inputs.extend(b);
+        inputs.extend(w.iter().cloned());
+        inputs.extend(b.iter().cloned());
         let sigmoid_eval = 1.0 / (1.0 + (-board_eval.eval as f32 / SCALE).exp());
         outputs.push(sigmoid_eval);
         outputs.push(1.0 - sigmoid_eval);
