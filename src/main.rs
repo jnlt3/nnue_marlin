@@ -14,8 +14,8 @@ const INPUTS: i64 = 768;
 const MID_0: i64 = 128;
 const OUT: i64 = 1;
 
-const BATCH_SIZE: usize = 16384;
-const PRINT_ITER: usize = 20;
+const BATCH_SIZE: usize = 4096;
+const PRINT_ITER: usize = 100;
 
 const SCALE: f32 = 300.0;
 
@@ -35,7 +35,7 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
                 ..Default::default()
             },
         ))
-        .add_fn(|x| x.clamp(0.0, 1.0))
+        .add_fn(|x| x.clamp(-1.0, 1.0))
         .add(nn::linear(
             vs / "out",
             MID_0,
@@ -66,7 +66,7 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
             opt.backward_step(&loss);
 
             for (_, value) in &mut vs.variables_.lock().unwrap().named_variables.iter_mut() {
-                value.set_data(&value.clamp(-1.98, 1.98));
+                *value = value.clamp(-1.98, 1.98);
             }
 
             total_loss += &loss;
@@ -144,7 +144,6 @@ fn main() {
     let gpu = matches.value_of("cuda");
     let wdl = matches.value_of("wdl").is_some();
 
-    tch::set_num_threads(8);
     let device = if let Some(gpu) = gpu {
         Device::Cuda(gpu.parse::<usize>().unwrap())
     } else {
