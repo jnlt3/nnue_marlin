@@ -11,7 +11,7 @@ use tch::{
 use serde::{Deserialize, Serialize};
 
 const INPUTS: i64 = 768;
-const MID_0: i64 = 128;
+const MID_0: i64 = 512;
 const OUT: i64 = 1;
 
 const BATCH_SIZE: usize = 4096;
@@ -35,7 +35,7 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
                 ..Default::default()
             },
         ))
-        .add_fn(|x| x.clamp(-1.0, 1.0))
+        .add_fn(|x| x.clamp(0.0, 1.0))
         .add(nn::linear(
             vs / "out",
             MID_0,
@@ -49,7 +49,8 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
 }
 
 fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
-    let vs = nn::VarStore::new(device);
+    let mut vs = nn::VarStore::new(device);
+    vs.bfloat16();
     let net = nnue(&vs.root());
     let mut opt = nn::AdamW::default().build(&vs, 1e-3).unwrap();
     for epoch in 0.. {
