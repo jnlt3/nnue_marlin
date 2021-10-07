@@ -67,7 +67,7 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
             opt.backward_step(&loss);
 
             for (_, value) in &mut vs.variables_.lock().unwrap().named_variables.iter_mut() {
-                *value = value.clamp(-1.98, 1.98);
+                value.set_data(&value.clamp(-1.98, 1.98));
             }
 
             total_loss += &loss;
@@ -107,6 +107,7 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
 }
 
 fn main() {
+    tch::maybe_init_cuda();
     let matches = App::new("NNUE Marlin")
         .version("v0.1-beta")
         .author("Doruk S. <dsekercioglu2003@gmail.com>")
