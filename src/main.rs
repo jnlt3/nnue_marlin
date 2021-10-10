@@ -7,6 +7,7 @@ use tch::{
     nn::{self, LinearConfig, Module, OptimizerConfig},
     Device, Tensor,
 };
+use tch::IndexOp;
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +23,36 @@ const SCALE: f32 = 300.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct W {
     pub weights: Vec<Vec<Vec<f64>>>,
+}
+
+fn nnue_sym(vs: &nn::Path) -> impl nn::Module {
+    let feature_layer = nn::linear(
+        vs / "feature",
+        INPUTS,
+        MID_0,
+        LinearConfig {
+            bias: false,
+            ..Default::default()
+        },
+    );
+
+    let feature_bias = vs.zeros("feature_bias", &[MID_0]);
+
+    let out_layer = nn::linear(
+        vs / "out",
+        MID_0,
+        OUT,
+        LinearConfig {
+            bias: false,
+            ..Default::default()
+        },
+    );
+
+    nn::func(move |xs| {
+        let w = feature_layer.forward(&xs.i((.., 0, ..)));
+        let b = feature_layer.forward(&xs.i((.., 1, ..)));
+        out_layer.forward(&(w - b + &feature_bias).clamp(0.0, 1.0)).sigmoid()
+    })
 }
 
 fn nnue(vs: &nn::Path) -> impl nn::Module {
@@ -51,7 +82,7 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
 fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
     let mut vs = nn::VarStore::new(device);
     vs.bfloat16();
-    let net = nnue(&vs.root());
+    let net = nnue_sym(&vs.root());
     let mut opt = nn::AdamW::default().build(&vs, 1e-3).unwrap();
     for epoch in 0.. {
         data.shuffle(&mut rand::thread_rng());
@@ -82,16 +113,14 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
                 running_loss = Tensor::of_slice(&[0.0]).detach();
             }
         }
-        let mut weights = vec![vec![]; 4];
+        let mut weights = vec![vec![]; 3];
         for (name, tensor) in &vs.variables() {
-            let (index, input_size) = if name == "input.weight" {
+            let (index, input_size) = if name == "feature.weight" {
                 (0, INPUTS)
-            } else if name == "input.bias" {
+            } else if name == "feature_bias" {
                 (1, MID_0)
             } else if name == "out.weight" {
                 (2, MID_0)
-            } else if name == "out.bias" {
-                (3, OUT)
             } else {
                 panic!("WARNING: UNKNOWN LAYER");
             };
@@ -211,10 +240,9 @@ fn to_input_vectors(board_eval: &[BoardEval], wdl: bool) -> DataSet {
             1.0 / (1.0 + (-board_eval.eval as f32 / SCALE).exp())
         };
         outputs.push(sigmoid_eval);
-        outputs.push(1.0 - sigmoid_eval);
     }
     DataSet {
-        inputs: Tensor::of_slice(&inputs).view_(&[-1, INPUTS]).detach(),
+        inputs: Tensor::of_slice(&inputs).view_(&[-1, 2, INPUTS]).detach(),
         outputs: Tensor::of_slice(&outputs).view_(&[-1, 1]).detach(),
     }
 }
