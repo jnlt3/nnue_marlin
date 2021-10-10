@@ -11,7 +11,7 @@ use tch::{
 use serde::{Deserialize, Serialize};
 
 const INPUTS: i64 = 768;
-const MID_0: i64 = 128;
+const MID_0: i64 = 512;
 const OUT: i64 = 1;
 
 const BATCH_SIZE: usize = 16384;
@@ -110,6 +110,7 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
 }
 
 fn main() {
+    tch::maybe_init_cuda();
     let matches = App::new("NNUE Marlin")
         .version("v0.1-beta")
         .author("Doruk S. <dsekercioglu2003@gmail.com>")
