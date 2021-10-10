@@ -14,7 +14,7 @@ const INPUTS: i64 = 768;
 const MID_0: i64 = 128;
 const OUT: i64 = 1;
 
-const BATCH_SIZE: usize = 4096;
+const BATCH_SIZE: usize = 16384;
 const PRINT_ITER: usize = 100;
 
 const SCALE: f32 = 300.0;
@@ -31,17 +31,17 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
             INPUTS,
             MID_0,
             LinearConfig {
-                bias: false,
+                bias: true,
                 ..Default::default()
             },
         ))
-        .add_fn(|x| x.clamp(-1.0, 1.0))
+        .add_fn(|x| x.clamp(0.0, 1.0))
         .add(nn::linear(
             vs / "out",
             MID_0,
             OUT,
             LinearConfig {
-                bias: false,
+                bias: true,
                 ..Default::default()
             },
         ))
@@ -49,7 +49,8 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
 }
 
 fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
-    let vs = nn::VarStore::new(device);
+    let mut vs = nn::VarStore::new(device);
+    vs.bfloat16();
     let net = nnue(&vs.root());
     let mut opt = nn::AdamW::default().build(&vs, 1e-3).unwrap();
     for epoch in 0.. {
@@ -66,7 +67,7 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
             opt.backward_step(&loss);
 
             for (_, value) in &mut vs.variables_.lock().unwrap().named_variables.iter_mut() {
-                *value = value.clamp(-1.98, 1.98);
+                value.set_data(&value.clamp(-1.98, 1.98));
             }
 
             total_loss += &loss;
@@ -81,15 +82,18 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
                 running_loss = Tensor::of_slice(&[0.0]).detach();
             }
         }
-        let mut weights = vec![vec![]; 2];
+        let mut weights = vec![vec![]; 4];
         for (name, tensor) in &vs.variables() {
             let (index, input_size) = if name == "input.weight" {
                 (0, INPUTS)
-            } else if name == "out.weight" {
+            } else if name == "input.bias" {
                 (1, MID_0)
+            } else if name == "out.weight" {
+                (2, MID_0)
+            } else if name == "out.bias" {
+                (3, OUT)
             } else {
-                println!("WARNING: UNKNOWN LAYER");
-                (1, 1)
+                panic!("WARNING: UNKNOWN LAYER");
             };
             weights[index] = tensor_to_slice(&tensor, input_size);
         }
@@ -214,9 +218,9 @@ fn to_input_vectors(board_eval: &[BoardEval], wdl: bool) -> DataSet {
     }
 }
 
-fn to_input_vector(board: Board) -> ([f32; 768], [f32; 768]) {
-    let mut w_perspective = [0_f32; 768];
-    let mut b_perspective = [0_f32; 768];
+fn to_input_vector(board: Board) -> ([f32; INPUTS as usize], [f32; INPUTS as usize]) {
+    let mut w_perspective = [0_f32; INPUTS as usize];
+    let mut b_perspective = [0_f32; INPUTS as usize];
 
     let white = *board.color_combined(Color::White);
     let black = *board.color_combined(Color::Black);
