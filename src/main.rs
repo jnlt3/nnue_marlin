@@ -1,6 +1,6 @@
 use std::{str::FromStr, time::Instant};
 
-use chess::{Board, Color, Piece};
+use chess::{BitBoard, Board, Color, Piece};
 use clap::{App, Arg};
 use rand::prelude::SliceRandom;
 use tch::{
@@ -12,47 +12,17 @@ use tch::IndexOp;
 use serde::{Deserialize, Serialize};
 
 const INPUTS: i64 = 768;
-const MID_0: i64 = 512;
+const MID_0: i64 = 128;
 const OUT: i64 = 1;
 
 const BATCH_SIZE: usize = 16384;
 const PRINT_ITER: usize = 100;
 
-const SCALE: f32 = 300.0;
+const SCALE: f32 = 170.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct W {
     pub weights: Vec<Vec<Vec<f64>>>,
-}
-
-fn nnue_sym(vs: &nn::Path) -> impl nn::Module {
-    let feature_layer = nn::linear(
-        vs / "feature",
-        INPUTS,
-        MID_0,
-        LinearConfig {
-            bias: false,
-            ..Default::default()
-        },
-    );
-
-    let feature_bias = vs.zeros("feature_bias", &[MID_0]);
-
-    let out_layer = nn::linear(
-        vs / "out",
-        MID_0,
-        OUT,
-        LinearConfig {
-            bias: false,
-            ..Default::default()
-        },
-    );
-
-    nn::func(move |xs| {
-        let w = feature_layer.forward(&xs.i((.., 0, ..)));
-        let b = feature_layer.forward(&xs.i((.., 1, ..)));
-        out_layer.forward(&(w - b + &feature_bias).clamp(0.0, 1.0)).sigmoid()
-    })
 }
 
 fn nnue(vs: &nn::Path) -> impl nn::Module {
@@ -72,7 +42,7 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
             MID_0,
             OUT,
             LinearConfig {
-                bias: true,
+                bias: false,
                 ..Default::default()
             },
         ))
@@ -82,7 +52,7 @@ fn nnue(vs: &nn::Path) -> impl nn::Module {
 fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
     let mut vs = nn::VarStore::new(device);
     vs.bfloat16();
-    let net = nnue_sym(&vs.root());
+    let net = nnue(&vs.root());
     let mut opt = nn::AdamW::default().build(&vs, 1e-3).unwrap();
     for epoch in 0.. {
         data.shuffle(&mut rand::thread_rng());
@@ -97,6 +67,7 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
                 .mse_loss(&data.outputs, tch::Reduction::Mean);
             opt.backward_step(&loss);
 
+            let loss = loss.detach();
             for (_, value) in &mut vs.variables_.lock().unwrap().named_variables.iter_mut() {
                 value.set_data(&value.clamp(-1.98, 1.98));
             }
@@ -113,15 +84,17 @@ fn train(mut data: Vec<BoardEval>, wdl: bool, device: Device, out_file: &str) {
                 running_loss = Tensor::of_slice(&[0.0]).detach();
             }
         }
-        let mut weights = vec![vec![]; 3];
+        let mut weights = vec![vec![]; 4];
         for (name, tensor) in &vs.variables() {
-            let (index, input_size) = if name == "feature.weight" {
+            let (index, input_size) = if name == "input.weight" {
                 (0, INPUTS)
-            } else if name == "feature_bias" {
+            } else if name == "input.bias" {
                 (1, MID_0)
             } else if name == "out.weight" {
                 (2, MID_0)
-            } else {
+            }else if name == "out.bias" {
+                (3, 1)
+            }  else {
                 panic!("WARNING: UNKNOWN LAYER");
             };
             weights[index] = tensor_to_slice(&tensor, input_size);
@@ -240,9 +213,10 @@ fn to_input_vectors(board_eval: &[BoardEval], wdl: bool) -> DataSet {
             1.0 / (1.0 + (-board_eval.eval as f32 / SCALE).exp())
         };
         outputs.push(sigmoid_eval);
+        outputs.push(1.0 - sigmoid_eval);
     }
     DataSet {
-        inputs: Tensor::of_slice(&inputs).view_(&[-1, 2, INPUTS]).detach(),
+        inputs: Tensor::of_slice(&inputs).view_(&[-1, INPUTS]).detach(),
         outputs: Tensor::of_slice(&outputs).view_(&[-1, 1]).detach(),
     }
 }
