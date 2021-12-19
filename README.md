@@ -1,5 +1,7 @@
 # nnue_marlin
 
+### This repository has been replaced by [Marlinflow](https://github.com/dsekercioglu/marlinflow)
+
 NNUE Marlin is used to create Neural Networks for chess position evaluation.
 
 It currently supports different configurations via changing code manually however the command line arguments will be expanded upon later...
